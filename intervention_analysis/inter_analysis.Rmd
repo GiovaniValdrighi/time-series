@@ -1,0 +1,443 @@
+---
+title: "Análise de intervenção"
+author: "Giovani Valdrighi, Vitória Guardieiro"
+date: "11/12/2020"
+output: beamer_presentation 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, message = FALSE)
+library(tseries)
+library(zoo)
+library(ggplot2)
+library(forecast)
+library(dplyr)
+library(lmtest)
+library(pander)
+library(imager)
+library(TSA)
+library(tsoutliers)
+```
+
+
+# Total Business Sales FRED
+
+- Dados de 01/2002 até 12/2012, com intervenção em 07/2008. O período de  01/2013 para 12/2014 será usado como validação do modelo.
+- Em 2008 ocorreu uma crise bancária internacional, fortemente afetando as vendas no EUA.
+
+---
+
+```{r}
+data <- read.csv('TOTBUSSMNSA.csv')
+title = 'Total Business Sales FRED (FED St. Louis Economics Research)'
+#data before intervention
+pre_intervention <- data %>% filter(DATE < as.Date("2008-09-01"))
+fred_FIT <- data %>% filter(DATE < as.Date("2013-01-01"))
+FRED_pre <- ts(pre_intervention$TOTBUSSMNSA,
+           start = c(2002, 1),
+           frequency = 12)
+
+
+#fit data
+FRED <- ts(fred_FIT$TOTBUSSMNSA, start = c(2002, 1), frequency = 12)
+
+#all data
+FRED_all <- ts(data$TOTBUSSMNSA, start = c(2002, 1), frequency = 12)
+#check if variance is the same
+autoplot(FRED, main = title) +
+  scale_x_continuous(breaks = scales::extended_breaks(10))
+```
+
+---
+
+- Etapas da modelagem:
+  - Estabilização da variância
+  - 1º: modelo SARIMA pré-intervenção
+  - Diferenciação para remoção de tendência
+  - Identificação do modelo com ACF e PACF
+  - Escolha de modelo
+  - 2º: Modelagem de intervenção
+  - Detecção de intervenção
+  - Avaliação de funções de transferência
+  
+---
+
+# Estabilização da variância
+
+- Com a transformação de BoxCox o lambda é $0.137$.
+
+```{r}
+
+#series need stabilization
+lambda <- BoxCox.lambda(FRED_all)
+
+#data after stabilization
+autoplot(BoxCox(FRED, lambda), main = title) +
+  scale_x_continuous(breaks = scales::extended_breaks(10))
+
+
+```
+
+---
+
+# SARIMA pré-intervenção
+
+- Modelo com dados até 07/2008. Os plots e modelagem utilizam os dados transformados.
+
+```{r}
+autoplot(BoxCox(FRED_pre, lambda), main = title) + 
+  scale_x_continuous(breaks = scales::extended_breaks(10))
+```
+
+---
+
+## Diferenças
+
+- Vamos identificar os parâmetros $d$ e $D$ do modelo SARIMA.
+
+```{r}
+#checking derivation
+
+par(mfrow = c(2, 2))
+FRED_pre %>% BoxCox(lambda = lambda) %>% plot(main = "Series")
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff() %>% plot(main = "diff Series")
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff() %>% diff() %>% plot(main = " diff diff Series")
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff() %>% diff(lag = 12) %>% plot(main = "diff diff(12) Series")
+
+```
+
+---
+
+- Uso do teste Augmented Dickey Fuller para verificar se existe tendência.
+- ADF test p-valores:
+  - Série original: 0.01
+  - Diff() series: 0.0206
+  - Diff() Diff() series: 0.01
+  - Diff() Diff(12) series: 0.01
+- Nós vamos usar $d= 1$ e $D = 0$ ou $D= 1$.
+
+---
+
+## ACF e PACF
+
+- Plotar a ACF e PACF do modelo para identificar os parâmetros $p, q, P, Q$.
+
+```{r}
+
+#checking the acfs
+par(mfrow = c(2, 2))
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff() %>% acf(main = "diff Series", lag.max = 48)
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff(lag = 12) %>% acf(main = "diff(12) Series", lag.max =  48)
+
+#checking the pacfs
+#par(mfrow = c(1, 2))
+FRED_pre %>% BoxCox(lambda = lambda) %>% diff() %>% pacf(main = "diff Series", lag.max = 48)
+FRED_pre %>% BoxCox(lambda = lambda) %>%diff(lag = 12) %>% pacf(main = "diff(12) Series", lag.max =  48)
+```
+
+---
+
+- Tanto nos plots não-sazonais e sazonais a ACF decresce lentamente, indicando um modelo auto regressivo.
+- Para as PACFs não-sazonais, nós temos os primeiros dois lags significantes e para a sazonal nós temos os três primeiros lags significantes.
+- Vamos avaliar os seguintes modelos:
+  - SARIMA(2, 1, 1)(3, 0, 1)
+  - SARIMA(2, 1, 1)(2, 0, 1)
+  - SARIMA(2, 1, 1)(2, 1, 1)
+
+---
+
+## SARIMA(2, 1, 1)(3,0 ,1)
+
+\tiny 
+
+```{r }
+model1 <- Arima(FRED_pre, order = c(2, 1,1), seasonal = c(3, 0, 1), lambda = lambda)
+summary(model1)
+```
+
+---
+
+```{r}
+checkresiduals(model1, test = FALSE)
+```
+
+---
+
+## SARIMA(2, 1, 1)(2,0 ,1)
+
+\tiny 
+
+```{r }
+model2 <- Arima(FRED_pre, order = c(2, 1,1), seasonal = c(2, 0, 1), lambda = lambda)
+summary(model2)
+```
+
+---
+
+```{r}
+checkresiduals(model2, test = FALSE)
+```
+
+---
+
+## SARIMA(2, 1, 1)(2,1 ,1)
+
+\tiny 
+
+```{r }
+model3 <- Arima(FRED_pre, order = c(2, 1,1), seasonal = c(2, 1, 1), lambda = lambda)
+summary(model3)
+```
+
+---
+
+```{r}
+checkresiduals(model3, test = FALSE)
+```
+
+
+---
+
+- O modelo com menor AIC é o SARIMA(2, 1, 1)(2, 1, 1).
+
+```{r}
+plot(FRED_pre, lwd = 1.5, main = "FRED pre intervention Real x Predicted SARIMA(2, 1, 1)(2,1,1)")
+lines(model3$fitted, col = 'red', lwd = 1.5)
+legend("topleft", legend=c("Predictions", "Real values"), col=c('red','black'), lty = 1:1, cex=0.8)
+```
+
+---
+
+# Predição pré-intervenção
+
+- Nós agora olhamos para como o nosso modelo diz que a série deveria se comportar caso não houvesse a intervenção em julho de 2008. 
+
+```{r}
+plot(forecast(model3, h = 48, lambda =lambda, biasadj = TRUE), main = "FRED series x Forecast of pre-intervention model SARIMA(2, 1,1)(2,1,1)")
+lines(FRED)
+legend("topleft", legend=c("Forecast mean",  "90%", "95%", "Real values"), col=c('blue','#596DD5', "#D5DBFF" ,'black' ), lty = 1:1, cex=0.8)
+```
+
+---
+
+# Modelagem de intervenção
+
+- Vamos considerar diferentes modelagens de intervenção, variando a função de transferência.
+
+
+---
+
+## Efeito permanente constante
+
+- Para o primeiro modelo de intervenção, nós vamos definir $h_t = I(t > jul2008)\delta_0$, então vamos ter um efeito permanente igual a $\delta_0$ quando o tempo for maior do que julho de 2008.
+- O valor $\delta_0$ estimado é $0.1105$ com s.e. $0.1492$, então o intervalo inclui $0$.
+
+\tiny 
+
+```{r }
+#julh of 2008 is the 80 row
+permanent_const_eff <-  1*(seq_along(fred_FIT$DATE) >= 79)
+model4 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), xreg = permanent_const_eff, lambda = lambda)
+summary(model4)
+```
+
+---
+
+## Efeito temporário constante
+
+- Agora para o modelo de intervenção nós vamos definir $h_t = I(t = jul2008)\delta_0$, então haverá um efeito temporário de valor $\delta_0$ em julho de 2008.
+- O valor $\delta_0$  estimado é $0.2209$ com s.e. $0.1134$, então o intervalo não inclui $0$.
+- O AIC também foi menor do que o modelo de efeito permanente.
+
+\tiny 
+
+```{r }
+#julh of 2008 is the 80 row
+temporary_const_eff <-  1*(seq_along(fred_FIT$DATE) == 79)
+model5 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), xreg = temporary_const_eff, lambda = lambda)
+summary(model5)
+```
+---
+
+## Identificação de outliers
+
+- São indentificados dois pontos de mudança, em agosto de 2008 e novembro de 2008, usaremos esse resultados em um modelo posterior.
+
+---
+
+
+```{r}
+
+outlier.FRED <- tsoutliers::tso(FRED,types = c("LS","TC"),maxit.iloop= 2)
+plot(outlier.FRED)
+
+```
+
+---
+
+## Efeito de intervenção decrescente
+
+- Agora nós modelamos a função de transferência como um $AR(1)$, isso é, 
+$h_t = \frac{I(t = jul2008)\delta_0}{1 - \omega_0B}$ nós podemos ter um efeito mais complexo, sem ser uma mudança cosntante na média. 
+- Com os valores estimado para $\delta_0$ e $\omega_0$ nós podemos calcular a curva de transferência.
+
+\tiny
+
+```{r}
+mod.arimax <- arimax(BoxCox(FRED, lambda), order=c(2, 1, 1),
+                     seasonal=list(order=c(2, 1, 1), frequency=12),
+                     include.mean=FALSE,
+                     xtransf=temporary_const_eff,
+                     transfer=list(c(1,0)), method = 'CSS')
+summary(mod.arimax)
+```
+
+---
+
+```{r}
+par(mfrow = c(1, 2))
+plot(fitted(mod.arimax), main = "FRED Real x Predicted with decreasing effect", col = 'red', lwd = 2)
+lines(BoxCox(FRED, lambda = lambda))
+legend("topleft", legend=c("Predictions", "Real values"), col=c('red','black'), lty = 1:1, cex=0.8)
+
+eval_temp_effect <- 0.2074 * 1*(seq_along(fred_FIT$DATE) == 79)
+for(i in seq(81,132)){
+  eval_temp_effect[i] = eval_temp_effect[i-1]*-0.2868
+}
+plot(ts(eval_temp_effect, start = c(2002, 1), frequency = 12), type = 'l', main = "AR(1) effect", ylab = "Z_t")
+```
+
+---
+
+- A curva mostra um crescimento e depois um decrescimento, enquanto nós esperaríamos um descrecimento. Além disso, com o resultado do TSA, nós podemos considerar que a intervenção realizada em julho só exibe resultados em agosto, ou seja podemos tentar modelar usando $I(t = aug2008)$.
+
+\tiny 
+
+```{r}
+mod.arimax2 <- arimax(BoxCox(FRED, lambda), order=c(2, 1, 1),
+                     seasonal=list(order=c(2, 1, 1), frequency=12),
+                     include.mean=FALSE,
+                     xtransf=1*(seq_along(fred_FIT$DATE) == 80),
+                     transfer=list(c(1,0)), method = 'CSS')
+summary(mod.arimax2)
+```
+
+---
+
+```{r}
+par(mfrow = c(1, 2))
+plot(fitted(mod.arimax2), main = "FRED Real x Predicted with decreasing effect", col = 'red', lwd = 2)
+lines(BoxCox(FRED, lambda = lambda))
+legend("topleft", legend=c("Predictions", "Real values"), col=c('red','black'), lty = 1:1, cex=0.8)
+
+eval_temp_effect2 <- -0.1517 *1*(seq_along(fred_FIT$DATE) == 80)
+for(i in seq(81,132)){
+  eval_temp_effect2[i] = eval_temp_effect2[i-1]*-0.1767
+}
+plot(ts(eval_temp_effect2, start = c(2002, 1), frequency = 12), type = 'l', main = "AR(1) effect", ylab = "Z_t")
+```
+
+
+---
+
+- Com a curva de transferência computada, nós podemos usar isso como um regressor em um modelo ARIMA. Nesse primeiro modelo vamos usar a intervenção em julho.
+
+\tiny 
+
+```{r}
+model8 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), lambda = lambda, xreg = eval_temp_effect)
+summary(model8)
+```
+
+
+---
+
+- Agora com a intervenção em agosto.
+
+\tiny
+
+```{r}
+model9 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), lambda = lambda, xreg = eval_temp_effect2)
+summary(model9)
+```
+
+---
+
+
+- Até então, o modelo com intervenção que apresentou menor AIC foi o com intervenção temporária em julho de 2008 e com intervenção decrescente começando em julho de 2008.
+- Vamos utilizar dos resultados da detecção de outliers para construir um modelo de intervenção.
+
+---
+
+## Duas intervenções permanentes
+
+- Modelo com intervenção permanente em agosto e em novembro de 2008.
+- Modelo obteve menor AIC até o momento, apresentando um resultado muito melhor que os demais.
+- Os parâmetros de intervenção possuem intervalo longe do $0$.
+
+\tiny
+
+```{r}
+n <- length(FRED)
+
+mo.ls <- outliers("LS", c(80, 83))
+ls <- outliers.effects(mo.ls, n)
+
+xreg.outliers <- cbind(ls)
+
+model7 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), xreg = xreg.outliers, lambda = lambda)
+summary(model7)
+
+```
+---
+
+## Intervenção de 3 meses
+
+- Com o resultado do TSA também podemos considerar uma intervenção constante temporária que dure 3 meses.
+- AIC foi menor do que modelo com duas intervenções permanentes.
+
+\tiny
+
+```{r}
+short_const_effect = 1*(seq_along(fred_FIT$DATE) >=80 & seq_along(fred_FIT$DATE) <= 83)
+
+model6 <- Arima(FRED, order = c(2, 1, 1), seasonal = c(2, 1, 1), xreg = short_const_effect, lambda = lambda)
+summary(model6)
+
+```
+
+---
+
+## Predição modelo de intervenção decrescente
+
+- Predição de 12 meses e 24 meses para o modelo com intervenção em julho de 2008 e com transferência decrescente.
+
+```{r}
+par(mfrow = c(2, 1))
+plot(forecast(model8, h = 12, lambda =lambda, biasadj = TRUE, xreg = rep(0, 12)), main = "FRED series x Forecast of one decrescent intervention model 12 months")
+t <- ts(data %>% filter(DATE < as.Date("2014-01-01")) %>% select(TOTBUSSMNSA), start = c(2002, 1), frequency =  12)
+lines(t)
+legend("topleft", legend=c("Forecast mean",  "90%", "95%", "Real values"), col=c('blue','#596DD5', "#D5DBFF" ,'black' ), lty = 1:1, cex=0.8)
+
+plot(forecast(model8, h = 24, lambda =lambda, biasadj = TRUE, xreg = rep(0, 24)), main = "FRED series x Forecast of of one decrescent intervention model 24 months")
+lines(FRED_all)
+legend("topleft", legend=c("Forecast mean",  "90%", "95%", "Real values"), col=c('blue','#596DD5', "#D5DBFF" ,'black' ), lty = 1:1, cex=0.8)
+```
+
+---
+
+## Predição com modelo de duas intervenções permanentes 
+
+```{r}
+par(mfrow = c(2, 1))
+plot(forecast(model7, h = 12, lambda =lambda, biasadj = TRUE, xreg = as.matrix(data.frame(LS80 = rep(1, 12), LS83 = rep(1, 12)))), main = "FRED series x Forecast of two permanent interventions model 12 months")
+t <- ts(data %>% filter(DATE < as.Date("2014-01-01")) %>% select(TOTBUSSMNSA), start = c(2002, 1), frequency =  12)
+lines(t)
+legend("topleft", legend=c("Forecast mean",  "90%", "95%", "Real values"), col=c('blue','#596DD5', "#D5DBFF" ,'black' ), lty = 1:1, cex=0.8)
+
+plot(forecast(model7, h = 24, lambda =lambda, biasadj = TRUE, xreg = as.matrix(data.frame(LS80 = rep(1, 24), LS83 = rep(1, 24)))), main = "FRED series x Forecast of two permanent interventions model 24 months")
+lines(FRED_all)
+legend("topleft", legend=c("Forecast mean",  "90%", "95%", "Real values"), col=c('blue','#596DD5', "#D5DBFF" ,'black' ), lty = 1:1, cex=0.8)
+```
+  
+
